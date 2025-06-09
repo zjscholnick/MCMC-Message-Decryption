@@ -1,111 +1,154 @@
+# File: metropolis_hastings.py
+
 import numpy as np
 import time
-import shutil
 import random
+import psutil
+import shutil
 
-def metropolis_hastings(initial_state, proposal_function, log_density, iters=1000, print_every=10, tolerance=0.02, error_function=None, pretty_state=None):
+def metropolis_hastings(initial_state,
+                        proposal_function,
+                        log_density,
+                        iters=1000,
+                        print_every=10,
+                        tolerance=0.02,
+                        error_function=None,
+                        pretty_state=None):
     """
-    Runs a metropolis hastings algorithm given the settings
-    
-    Arguments:
-    
-    initial_state: state from where we should start moving
-    
-    proposal_function: proposal function for next state, it takes the current state
-                       and returns the next state
-                       
-    log_density: log probability(upto an unknown normalization constant) function, takes a 
-                 state as input, and gives the log(probability*some constant) of the state.
-    
-    iters: number of iters to continue
-    
-    print_every: print every $ iterations the current statistics. For diagnostics purposes.
-    
-    tolerance: if acceptance rate drops below this, we stop the simulation
-    
-    error_function: computes the error for current state. Printed every print_every iterations.
-                    Just for your diagnostics.
-    
-    pretty_state: A function from your side to print the current state in a pretty format.
-    
-    Returns:
-    
-    states: List of states generated during simulation
-    
-    cross_entropies: list of negative log probabilites during the simulation.
-    
-    errors: lists of errors generated if given error_function, none otherwise.
-    
+    Runs a Metropolis–Hastings sampler, while tracking detailed performance stats.
+    Returns: (states, log_probs, errors, performance)
     """
-    
+
+    # Initialize performance bookkeeping
+    proc = psutil.Process()
+    memory_start = proc.memory_info().rss / (1024**2)
+    time_start = time.time()
+    performance = {
+        'time': {
+            'start': time_start,
+            'end': None,
+            'total': None,
+            'proposal_fn': 0.0,
+            'prob_fn': 0.0,
+            'per_iteration': []
+        },
+        'memory': {
+            'start': memory_start,
+            'peak': memory_start,
+            'end': None,
+            'sampled_memory': []
+        },
+        'algorithm': {
+            'num_iterations': 0,
+            'num_proposals': 0,
+            'num_accepted': 0,
+            'accept_rate': 0.0,
+            'best_entropy': float('inf')
+        },
+        'cpu': {
+            'samples': []
+        }
+    }
+
+    # initial log‐density
     p1 = log_density(initial_state)
-    errors = []
-    cross_entropies = []
-    
+    # initial entropy = – log_prob
+    performance['algorithm']['best_entropy'] = min(performance['algorithm']['best_entropy'],
+                                                   -p1)
+
     state = initial_state
     cnt = 0
     accept_cnt = 0
-    error = -1
-    states = [initial_state]
     it = 0
-    prints = 0
+
+    states = [initial_state]
+    cross_entropies = []
+    errors = [] if error_function else None
+
     entropy_print = 100000
+
     while it < iters:
-
-        #propose a move
+        # PROPOSAL
+        t0 = time.time()
         new_state = proposal_function(state)
-        p2 = log_density(new_state)
-        
-        u = random.random()
-        cnt += 1
-        
-        #accept the new move with probability p2-p1
-        if p2-p1 > np.log(u):
+        dt = time.time() - t0
+        performance['time']['proposal_fn'] += dt
 
-            #update the state
+        performance['algorithm']['num_proposals'] += 1
+        cnt += 1
+
+        # LOG‐DENSITY
+        t1 = time.time()
+        p2 = log_density(new_state)
+        dp = time.time() - t1
+        performance['time']['prob_fn'] += dp
+
+        # MH acceptance
+        u = random.random()
+        if (p2 - p1) > np.log(u):
+            # accept
             state = new_state
-            
-            #increment the iteration counter
-            it += 1
-            
-            #increment the acceptance counter
-            accept_cnt += 1
-            
-            #update the current state probability
             p1 = p2
-            
-            #append errors and states
-            cross_entropies.append(p1)
+            accept_cnt += 1
+            it += 1
+
+            # record state
             states.append(state)
-            if error_function is not None:
-                error = error_function(state)
-                errors.append(error)
-                
-            #print if required
-            if -p1 < 0.995 * entropy_print: 
+            cross_entropies.append(p1)
+
+            # error if requested
+            if error_function:
+                err = error_function(state)
+                errors.append(err)
+
+            # update algorithm stats
+            performance['algorithm']['num_iterations'] = it
+            performance['algorithm']['num_accepted'] = accept_cnt
+            performance['algorithm']['best_entropy'] = min(
+                performance['algorithm']['best_entropy'],
+                -p1
+            )
+
+            # sample memory & CPU
+            mem = proc.memory_info().rss / (1024**2)
+            performance['memory']['sampled_memory'].append(mem)
+            performance['memory']['peak'] = max(performance['memory']['peak'], mem)
+            performance['cpu']['samples'].append(proc.cpu_percent(interval=None))
+
+            # record per-iteration timings
+            performance['time']['per_iteration'].append({
+                'proposal': dt,
+                'prob': dp
+            })
+
+            # diagnostic printing
+            if -p1 < 0.995 * entropy_print:
                 entropy_print = -p1
-                acceptance = float(accept_cnt)/float(cnt)
-                s = ""
-                if pretty_state is not None:
-                    s = "\n" + pretty_state(state)
-                print(shutil.get_terminal_size().columns*'-')
-                print("\n Entropy : ", round(p1,4), 
-                    ", Iteration : ", it, 
-                    ", Acceptance Probability : ", 
-                    round(acceptance,4))
-                print(shutil.get_terminal_size().columns*'-')
-                print(s)
-                
-                if acceptance < tolerance:
+                acc_rate = accept_cnt / float(cnt)
+                print(shutil.get_terminal_size().columns * '-')
+                print(f"\n Entropy : {round(p1,4)}"
+                      f", Iteration : {it}"
+                      f", Acceptance : {round(acc_rate,4)}")
+                if pretty_state:
+                    print(pretty_state(state))
+                print(shutil.get_terminal_size().columns * '-')
+
+                if acc_rate < tolerance:
                     break
-                
+
+                # reset counters
                 cnt = 0
                 accept_cnt = 0
+                #time.sleep(.1)
 
-                #sleep to see output
-                time.sleep(.1)
-    
-    if error_function is None:
-        errors = None
-    
-    return states, cross_entropies, errors
+    # finalize performance
+    performance['time']['end'] = time.time()
+    performance['time']['total'] = performance['time']['end'] - performance['time']['start']
+    performance['memory']['end'] = proc.memory_info().rss / (1024**2)
+    performance['algorithm']['accept_rate'] = (
+        performance['algorithm']['num_accepted'] /
+        max(1, performance['algorithm']['num_proposals'])
+    )
+
+    return states, cross_entropies, errors, performance
+
