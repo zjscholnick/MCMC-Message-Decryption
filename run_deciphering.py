@@ -1,67 +1,50 @@
-# File: decode.py
-
-#!/usr/bin/env python3
-
-import sys
-import shutil
-import time
+import sys,shutil
 from optparse import OptionParser
-
+from concurrent.futures import ProcessPoolExecutor,as_completed
 from metropolis_hastings import metropolis_hastings
 from deciphering_utils import (
-    compute_statistics,
-    propose_a_move,
-    compute_probability_of_state,
-    pretty_state,
-    get_state
+    compute_statistics, get_state,
+    propose_a_move, compute_probability_of_state,
+    pretty_state
 )
 
+def run_chain(init,its,tol,pe):
+    return metropolis_hastings(init,
+        proposal_function=propose_a_move,
+        log_density=compute_probability_of_state,
+        iters=its,tolerance=tol,print_every=pe,
+        pretty_state=pretty_state)
+
 def main(argv):
-    parser = OptionParser()
-    parser.add_option("-i", "--input", dest="inputfile",
-                      help="input file to train the code on")
-    parser.add_option("-d", "--decode", dest="decode",
-                      help="file that needs to be decoded")
-    parser.add_option("-e", "--iters", dest="iterations",
-                      help="number of iterations to run", default=5000)
-    parser.add_option("-t", "--tolerance", dest="tolerance",
-                      help="acceptance tolerance", default=0.02)
-    parser.add_option("-p", "--print_every", dest="print_every",
-                      help="steps between diagnostics", default=10000)
+    p=OptionParser()
+    p.add_option("-i","--input",dest="inputfile")
+    p.add_option("-d","--decode",dest="decode")
+    p.add_option("-e","--iters",dest="iterations",default=5000)
+    p.add_option("-t","--tolerance",dest="tolerance",default=0.02)
+    p.add_option("-p","--print_every",dest="print_every",default=10000)
+    opts,_=p.parse_args(argv)
+    if not opts.inputfile or not opts.decode:
+        print("Usage: decode.py -i <input> -d <decode>"); sys.exit(1)
 
-    options, args = parser.parse_args(argv)
-    if not options.inputfile or not options.decode:
-        print("Usage: decode.py -i <inputfile> -d <decodefile> [options]")
-        sys.exit(1)
+    c2i, i2c, tr, fr = compute_statistics(opts.inputfile)
+    sc = list(open(opts.decode).read())
+    init = get_state(sc,tr,fr,c2i)
 
-    # prepare
-    char_to_ix, ix_to_char, tr, fr = compute_statistics(options.inputfile)
-    scrambled = list(open(options.decode, 'r').read())
-    initial_state = get_state(scrambled, tr, fr, char_to_ix)
+    metrics=[];all_s=[];all_e=[]
+    with ProcessPoolExecutor() as exec:
+        futs = [exec.submit(run_chain,init,
+                    int(opts.iterations),float(opts.tolerance),
+                    int(opts.print_every)) for _ in range(3)]
+        for f in as_completed(futs):
+            s,lps,_,perf = f.result()
+            all_s.extend(s); all_e.extend(lps); metrics.append(perf)
 
-    all_states = []
-    all_entropies = []
-    metrics = []
-
-    # run up to 3 independent chains
-    for run in range(3):
-        print(f"\n=== RUN {run+1} ===")
-        states, lps, _, perf = metropolis_hastings(
-            initial_state,
-            proposal_function=propose_a_move,
-            log_density=compute_probability_of_state,
-            iters=int(options.iterations),
-            tolerance=float(options.tolerance),
-            print_every=int(options.print_every),
-            pretty_state=pretty_state
-        )
-        all_states.extend(states)
-        all_entropies.extend(lps)
-        metrics.append(perf)
-
-    # sort by best entropy (neg. log‐prob)
-    paired = list(zip(all_states, all_entropies))
-    paired.sort(key=lambda x: x[1])
+    paired = sorted(zip(all_s,all_e), key=lambda x:x[1])
+    print("\nBest Guesses:"+"*"*shutil.get_terminal_size().columns)
+    for j in (1,2,3):
+        st,ent=paired[-j]
+        print(f"Guess {j} (ent={-ent:.4f}):"); print(pretty_state(st,full=True))
+        print("*"*shutil.get_terminal_size().columns)
 
     print("\n Best Guesses :\n" + ("*" * shutil.get_terminal_size().columns))
     for j in range(1, 4):

@@ -1,5 +1,3 @@
-# File: metropolis_hastings.py
-
 import numpy as np
 import time
 import random
@@ -46,7 +44,8 @@ def metropolis_hastings(initial_state,
             'best_entropy': float('inf')
         },
         'cpu': {
-            'samples': []
+            'samples': [],
+            'avg': None
         }
     }
 
@@ -68,7 +67,7 @@ def metropolis_hastings(initial_state,
     entropy_print = 100000
 
     while it < iters:
-        # PROPOSAL
+        # PROPOSAL timing only
         t0 = time.time()
         new_state = proposal_function(state)
         dt = time.time() - t0
@@ -150,5 +149,10 @@ def metropolis_hastings(initial_state,
         max(1, performance['algorithm']['num_proposals'])
     )
 
-    return states, cross_entropies, errors, performance
+    if performance['cpu']['samples']:
+        performance['cpu']['avg'] = (
+            sum(performance['cpu']['samples']) /
+            len(performance['cpu']['samples'])
+        )
 
+    return states, cross_entropies, errors, performance
