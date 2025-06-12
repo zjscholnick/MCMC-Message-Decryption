@@ -1,57 +1,67 @@
-import sys,shutil
+#!/usr/bin/env python3
+import sys
+import shutil
 from optparse import OptionParser
-from concurrent.futures import ProcessPoolExecutor,as_completed
 from metropolis_hastings import metropolis_hastings
 from deciphering_utils import (
-    compute_statistics, get_state,
-    propose_a_move, compute_probability_of_state,
+    compute_statistics,
+    get_state,
+    propose_a_move,
+    compute_probability_of_state,
     pretty_state
 )
-
-def run_chain(init,its,tol,pe):
-    return metropolis_hastings(init,
-        proposal_function=propose_a_move,
-        log_density=compute_probability_of_state,
-        iters=its,tolerance=tol,print_every=pe,
-        pretty_state=pretty_state)
-
 def main(argv):
-    p=OptionParser()
-    p.add_option("-i","--input",dest="inputfile")
-    p.add_option("-d","--decode",dest="decode")
-    p.add_option("-e","--iters",dest="iterations",default=5000)
-    p.add_option("-t","--tolerance",dest="tolerance",default=0.02)
-    p.add_option("-p","--print_every",dest="print_every",default=10000)
-    opts,_=p.parse_args(argv)
-    if not opts.inputfile or not opts.decode:
-        print("Usage: decode.py -i <input> -d <decode>"); sys.exit(1)
+    parser = OptionParser()
+    parser.add_option("-i", "--input", dest="inputfile",
+                      help="input file to train the code on")
+    parser.add_option("-d", "--decode", dest="decode",
+                      help="file that needs to be decoded")
+    parser.add_option("-e", "--iters", dest="iterations",
+                      help="number of iterations to run", default=5000)
+    parser.add_option("-t", "--tolerance", dest="tolerance",
+                      help="acceptance tolerance", default=0.02)
+    parser.add_option("-p", "--print_every", dest="print_every",
+                      help="steps between diagnostics", default=10000)
 
-    c2i, i2c, tr, fr = compute_statistics(opts.inputfile)
-    sc = list(open(opts.decode).read())
-    init = get_state(sc,tr,fr,c2i)
+    options, args = parser.parse_args(argv)
+    if not options.inputfile or not options.decode:
+        print("Usage: decode.py -i <inputfile> -d <decodefile> [options]")
+        sys.exit(1)
 
-    metrics=[];all_s=[];all_e=[]
-    with ProcessPoolExecutor() as exec:
-        futs = [exec.submit(run_chain,init,
-                    int(opts.iterations),float(opts.tolerance),
-                    int(opts.print_every)) for _ in range(3)]
-        for f in as_completed(futs):
-            s,lps,_,perf = f.result()
-            all_s.extend(s); all_e.extend(lps); metrics.append(perf)
+    # prepare
+    char_to_ix, ix_to_char, tr, fr = compute_statistics(options.inputfile)
+    scrambled = list(open(options.decode, 'r').read())
+    initial_state = get_state(scrambled, tr, fr, char_to_ix)
 
-    paired = sorted(zip(all_s,all_e), key=lambda x:x[1])
-    print("\nBest Guesses:"+"*"*shutil.get_terminal_size().columns)
-    for j in (1,2,3):
-        st,ent=paired[-j]
-        print(f"Guess {j} (ent={-ent:.4f}):"); print(pretty_state(st,full=True))
-        print("*"*shutil.get_terminal_size().columns)
+    all_states = []
+    all_entropies = []
+    metrics = []
 
-    print("\n Best Guesses :\n" + ("*" * shutil.get_terminal_size().columns))
+    # run up to 3 independent chains sequentially
+    for run in range(3):
+        print(f"\n=== RUN {run+1} ===")
+        states, lps, _, perf = metropolis_hastings(
+            initial_state,
+            proposal_function=propose_a_move,
+            log_density=compute_probability_of_state,
+            iters=int(options.iterations),
+            tolerance=float(options.tolerance),
+            print_every=int(options.print_every),
+            pretty_state=pretty_state
+        )
+        all_states.extend(states)
+        all_entropies.extend(lps)
+        metrics.append(perf)
+
+    # sort by best entropy (neg. log‐prob)
+    paired = sorted(zip(all_states, all_entropies), key=lambda x: x[1])
+
+    print("\nBest Guesses:" + "*"*shutil.get_terminal_size().columns)
     for j in range(1, 4):
         st, ent = paired[-j]
-        print(f"\nGuess {j} (entropy={round(-ent,4)}):\n")
+        print(f"\nGuess {j} (entropy={-ent:.4f}):\n")
         print(pretty_state(st, full=True))
-        print("*" * shutil.get_terminal_size().columns)
+        print("*"*shutil.get_terminal_size().columns)
 
     # aggregate and print overall metrics
     total_runtime    = sum(m['time']['total'] for m in metrics)
@@ -61,7 +71,7 @@ def main(argv):
     overall_accept   = (total_accepted / max(1, total_proposals)) * 100
 
     print("\nOVERALL STATISTICS:")
-    print(f"  Total runtime: {total_runtime:.2f} s")
+    print(f"  Runtime (s): {total_runtime:.2f}")
     print(f"  Total iterations: {total_iterations}")
     print(f"  Total proposals : {total_proposals}")
     print(f"  Overall accept rate: {overall_accept:.2f}%")
@@ -79,7 +89,19 @@ def main(argv):
     print("\nMEMORY USAGE:")
     print(f"  Peak memory: {peak_mem:.2f} MB")
 
-    # per-run details
+    # CPU usage
+    total_cpu_time = sum(
+        (m['cpu']['avg'] / 100.0) * m['time']['total']
+        for m in metrics
+    )
+    avg_cpu = sum(m['cpu']['avg'] for m in metrics) / len(metrics)
+    cpu_core_utilization = total_cpu_time / total_runtime
+
+    print("\nCPU USAGE:")
+    print(f"  Total CPU time used: {total_cpu_time:.3f} core-seconds")
+    print(f"  Avg CPU usage per chain: {avg_cpu:.3f}%")
+    print(f"  Avg core utilization across all chains: {cpu_core_utilization:.3f} cores")
+
     for idx, m in enumerate(metrics, 1):
         print(f"\nRUN {idx}:")
         print(f"  Runtime      : {m['time']['total']:.2f} s")
@@ -90,4 +112,3 @@ def main(argv):
 
 if __name__ == "__main__":
     main(sys.argv)
-

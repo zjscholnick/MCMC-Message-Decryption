@@ -1,9 +1,8 @@
 import sys
 import shutil
-import os
 from optparse import OptionParser
-import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from copy import deepcopy
 
 from metropolis_hastings import metropolis_hastings
 from deciphering_utils import (
@@ -12,9 +11,7 @@ from deciphering_utils import (
     pretty_state
 )
 
-def run_chain(scrambled_text, tr, fr, char_to_ix, iters, tol, print_every):
-    print(f"Running chain in PID {os.getpid()}")
-    init_state = get_state(scrambled_text, tr, fr, char_to_ix)
+def run_chain(init_state, iters, tol, print_every):
     return metropolis_hastings(
         init_state,
         proposal_function=propose_a_move,
@@ -45,9 +42,11 @@ def main(argv):
     all_states = []
     all_entropies = []
     with ProcessPoolExecutor() as executor:
+        # Single initial state copied into each chain
+        init_state = get_state(sc, tr, fr, c2i)
         futures = [
             executor.submit(
-                run_chain, sc, tr, fr, c2i,
+                run_chain, deepcopy(init_state),
                 int(opts.iterations), float(opts.tolerance), int(opts.print_every)
             ) for _ in range(3)
         ]
@@ -58,37 +57,43 @@ def main(argv):
             all_entropies.extend(lps)
             metrics.append(perf)
 
+    # sort by best entropy
     paired = sorted(zip(all_states, all_entropies), key=lambda x: x[1])
+
     print("\nBest Guesses:" + "*" * shutil.get_terminal_size().columns)
     for j in range(1, 4):
         st, ent = paired[-j]
-        print(f"\nGuess {j} (entropy={round(-ent, 4)}):\n")
+        print(f"\nGuess {j} (entropy={-ent:.4f}):\n")
         print(pretty_state(st, full=True))
         print("*" * shutil.get_terminal_size().columns)
-    total_runtime = max(m['time']['total'] for m in metrics)
-    total_proposals = sum(m['algorithm']['num_proposals'] for m in metrics)
-    total_accepted = sum(m['algorithm']['num_accepted'] for m in metrics)
+
+    # aggregate and print overall metrics
+    total_runtime    = sum(m['time']['total'] for m in metrics)
+    total_proposals  = sum(m['algorithm']['num_proposals'] for m in metrics)
+    total_accepted   = sum(m['algorithm']['num_accepted'] for m in metrics)
     total_iterations = sum(m['algorithm']['num_iterations'] for m in metrics)
-    overall_accept = (total_accepted / max(1, total_proposals)) * 100
+    overall_accept   = (total_accepted / max(1, total_proposals)) * 100
 
     print("\nOVERALL STATISTICS:")
-    print(f"  Total runtime: {total_runtime:.2f} s")
+    print(f"  Runtime (s): {total_runtime:.2f}")
     print(f"  Total iterations: {total_iterations}")
     print(f"  Total proposals : {total_proposals}")
     print(f"  Overall accept rate: {overall_accept:.2f}%")
 
+    # time breakdown
     prop_time = sum(m['time']['proposal_fn'] for m in metrics)
     dens_time = sum(m['time']['prob_fn'] for m in metrics)
     print("\nTIME BREAKDOWN:")
-    print(f"  Proposal fn: {prop_time:.2f}s ({100 * prop_time / total_runtime:.1f}%)")
-    print(f"  Density fn : {dens_time:.2f}s ({100 * dens_time / total_runtime:.1f}%)")
-    print(f"  Overhead   : {total_runtime - prop_time - dens_time:.2f}s")
+    print(f"  Proposal fn: {prop_time:.2f}s ({100*prop_time/total_runtime:.1f}%)")
+    print(f"  Density fn : {dens_time:.2f}s ({100*dens_time/total_runtime:.1f}%)")
+    print(f"  Overhead   : {total_runtime-prop_time-dens_time:.2f}s")
 
+    # memory
     peak_mem = max(m['memory']['peak'] for m in metrics)
     print("\nMEMORY USAGE:")
     print(f"  Peak memory: {peak_mem:.2f} MB")
 
-    #CPU usage
+    # CPU usage
     total_cpu_time = sum(
         (m['cpu']['avg'] / 100.0) * m['time']['total']
         for m in metrics
