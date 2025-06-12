@@ -155,7 +155,7 @@ def compute_probability_of_state(state):
                                           state["char_to_ix"], state["frequency_statistics"], state["transition_matrix"])
     
     return p
-
+'''
 def propose_a_move(state):
     """
     Proposes a new move for the given state, 
@@ -165,7 +165,18 @@ def propose_a_move(state):
     for key, value in state.items():
         new_state[key] = value
     new_state["permutation_map"] = move_one_step(state["permutation_map"])
+    return new_state'''
+
+def propose_a_move(state):
+    new_state = dict(state)
+    new_state["permutation_map"] = move_one_step_but_better(
+        state["permutation_map"],
+        state["text"],
+        state["frequency_statistics"],
+        state["char_to_ix"]
+    )
     return new_state
+
 
 def pretty_state(state, full=True):
     """

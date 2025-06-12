@@ -3,6 +3,7 @@ import shutil
 import random
 from copy import deepcopy
 from copy import copy
+import string
 
 def az_list():
     """
@@ -14,7 +15,7 @@ def az_list():
 def generate_random_permutation_map(chars):
     """
     Generate a random permutation map for given character list. Only allowed permutations
-    are alphabetical ones. Helpful for debugging
+    are training_dictical ones. Helpful for debugging
     
     Arguments:
     chars: list of characters
@@ -103,6 +104,56 @@ def move_one_step(p_map):
     
     return p_map_2
 
+def move_one_step_but_better(p_map, text, frequency_statistics, char_to_ix):
+
+    #accessing the relative frequency of all 26 letters in the training text
+    training_dict = [c for c in char_to_ix.keys() if c in string.ascii_letters]
+
+    #Only grabbing charcters from the decrypted text
+    filtered = [c for c in text if c in training_dict]
+    total = len(filtered)
+
+    # decrypting the filtered text
+    decrypted = [p_map[c] for c in filtered]
+
+    # calculating observed frequencies over training text
+    current_counts = np.zeros(len(training_dict))
+    for c in decrypted:
+        if c in training_dict:
+            current_counts[training_dict.index(c)] += 1
+    current_rel = current_counts / total
+
+    # building expected frequencies across the training_dict
+    total_expected = np.sum(frequency_statistics)
+    expected_rel = np.array([frequency_statistics[char_to_ix[c]] for c in training_dict]) / total_expected
+
+    # identifying descrepancies between current and expected frequencies of letters
+    diffs = np.abs(current_rel - expected_rel)
+
+    # creating a distribution of weights for each proposal - spanning all pairs of letters
+    pairs, weights = [], []
+    n = len(training_dict)
+    for i in range(n):
+        for j in range(i+1, n):
+            pairs.append((training_dict[i], training_dict[j]))
+            weights.append(diffs[i] + diffs[j])
+    weights = np.array(weights)
+
+    # normalize the weights to create a probability distribution
+    probs = weights / weights.sum()
+    # sample a pair of letters based on the calculated distribution
+    idx = random.choices(range(len(pairs)), weights = probs, k = 1)[0]
+    c1, c2 = pairs[idx]
+
+    # applying the swap in the previous p_map
+    new_p_map = deepcopy(p_map)
+    new_p_map[c1], new_p_map[c2] = p_map[c2], p_map[c1]
+    return new_p_map
+
+
+
+
+
 def pretty_string(text, full=False):
     """
     Pretty formatted string
@@ -111,7 +162,7 @@ def pretty_string(text, full=False):
         return ''.join(text[1:200]) #+ shutil.get_terminal_size().columns*'-'#'...'
     else:
         return ''.join(text) #+ shutil.get_terminal_size().columns*'-'#'...'
-    
+
 def compute_statistics(filename):
     """
     Returns the statistics for a text file.
