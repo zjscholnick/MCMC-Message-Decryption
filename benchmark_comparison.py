@@ -57,8 +57,8 @@ def run_n_benchmarks(script_name, n_runs=10):
     return results
 
 if __name__ == "__main__":
-    pooled_results = run_n_benchmarks("run_deciphering_parallel.py", n_runs=45)
-    non_pooled_results = run_n_benchmarks("run_deciphering.py", n_runs=45)
+    pooled_results = run_n_benchmarks("run_deciphering_parallel.py", n_runs=50)
+    non_pooled_results = run_n_benchmarks("run_deciphering.py", n_runs=50)
 
     print("\n======= Final Benchmark Summary =======")
     summarize_dicts(pooled_results, "POOLED")

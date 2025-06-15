@@ -19,6 +19,7 @@ def metropolis_hastings(initial_state,
 
     # Initialize performance bookkeeping
     proc = psutil.Process()
+    proc.cpu_percent(interval=None)
     memory_start = proc.memory_info().rss / (1024**2)
     time_start = time.time()
     performance = {
@@ -108,11 +109,6 @@ def metropolis_hastings(initial_state,
                 -p1
             )
 
-            # sample memory & CPU
-            mem = proc.memory_info().rss / (1024**2)
-            performance['memory']['sampled_memory'].append(mem)
-            performance['memory']['peak'] = max(performance['memory']['peak'], mem)
-            performance['cpu']['samples'].append(proc.cpu_percent(interval=None))
 
             # record per-iteration timings
             performance['time']['per_iteration'].append({
@@ -139,6 +135,14 @@ def metropolis_hastings(initial_state,
                 cnt = 0
                 accept_cnt = 0
                 #time.sleep(.1)
+    if it % 100 == 0:
+            mem = proc.memory_info().rss / (1024**2)
+            performance['memory']['sampled_memory'].append(mem)
+            performance['memory']['peak'] = max(performance['memory']['peak'], mem)
+            performance['cpu']['samples'].append(proc.cpu_percent(interval=None))
+
+            cpu_pct = proc.cpu_percent(interval=None)
+            performance['cpu']['samples'].append(cpu_pct)
 
     # finalize performance
     performance['time']['end'] = time.time()
