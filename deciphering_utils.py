@@ -175,3 +175,5 @@ def pretty_state(state, full=True):
         return pretty_string(scramble_text(state["text"][1:200], state["permutation_map"]), full)
     else:
         return pretty_string(scramble_text(state["text"], state["permutation_map"]), full)
+
+print("hello world")
